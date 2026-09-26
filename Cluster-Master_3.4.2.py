@@ -95,7 +95,8 @@ def recommend_eps_kdistance(xy_um, min_samples=3):
     Distanzkurve wird über die maximale Abweichung von der
     Verbindungslinie zwischen Anfang und Ende ausgewertet (Knie/Elbow).
 
-    Rückgabe: EPS in µm, auf ganze µm gerundet.
+    Rückgabe: EPS in µm. Es werden keine künstlichen oberen Grenzen
+    verwendet; die Skalierung ergibt sich ausschließlich aus den Daten.
     """
     n = len(xy_um)
     if n < min_samples or min_samples < 2:
@@ -137,10 +138,11 @@ def recommend_eps_kdistance(xy_um, min_samples=3):
         if not np.isfinite(eps) or eps <= 0:
             return np.nan
 
-        return float(np.clip(np.round(eps), 1.0, 100.0))
+        return float(np.round(eps, 1))
 
     except Exception:
         return np.nan
+
 
 
 def select_calibration_units(units, n_units):
@@ -599,12 +601,13 @@ if mode == "🧭 EPS-Kalibrierung":
     st.header("🧭 EPS-Kalibrierung")
     st.markdown(
         """
-        **Objektiver EPS-Vorschlag pro Image / ROI**
+        **Freie Auswahl von Image / ROI-Einheiten**
 
-        Für eine repräsentative Auswahl der MASTER-CSV wird aus der
-        lokalen Punktdichte ein EPS-Vorschlag berechnet. Der Mittelwert
-        dient ausschließlich als Orientierung. Die endgültige Wahl
-        erfolgt anschließend visuell mit **Colibri**.
+        Aus der gesamten MASTER-CSV werden nach und nach beliebige Image / ROI-Einheiten
+        ausgewählt. Für jede ausgewählte Einheit wird ein EPS-Vorschlag berechnet.
+        Die Auswahl kann jederzeit um weitere, beliebig verteilte Einheiten ergänzt werden.
+        Der Mittelwert dient ausschließlich als Orientierung. Die endgültige Wahl erfolgt
+        anschließend visuell mit **Colibri**.
         """
     )
 
@@ -612,8 +615,7 @@ if mode == "🧭 EPS-Kalibrierung":
         (str(image), str(roi))
         for image, image_group
         in df.groupby("Image", sort=True)
-        for roi, roi_group
-        in image_group.groupby("ROI_ID", sort=True)
+        for roi, roi_group in image_group.groupby("ROI_ID", sort=True)
     ]
 
     total_units = len(units)
@@ -622,116 +624,147 @@ if mode == "🧭 EPS-Kalibrierung":
         st.error("Keine Image/ROI-Einheiten gefunden.")
         st.stop()
 
-    c1, c2 = st.columns(2)
+    # Die Auswahl gehört zum aktuell geladenen Datensatz.
+    units_signature = tuple(units)
+    if st.session_state.get("eps_calibration_units_signature") != units_signature:
+        st.session_state.eps_calibration_units_signature = units_signature
+        st.session_state.eps_calibration_selected = []
+
+    if "eps_calibration_selected" not in st.session_state:
+        st.session_state.eps_calibration_selected = []
+
+    c1, c2 = st.columns([3, 1])
 
     with c1:
-        n_calibration = st.number_input(
-            "Anzahl Image/ROI-Einheiten",
-            min_value=5,
-            max_value=min(100, total_units),
-            value=min(15, total_units),
-            step=1
+        selected_candidate = st.selectbox(
+            "Image / ROI auswählen",
+            options=units,
+            format_func=lambda u: f"Image {u[0]}  |  ROI {u[1]}",
+            key="eps_calibration_candidate"
         )
 
     with c2:
+        st.write("")
+        st.write("")
+        add_clicked = st.button(
+            "➕ Zur Auswahl hinzufügen",
+            width="stretch"
+        )
+
+    if add_clicked:
+        if selected_candidate in st.session_state.eps_calibration_selected:
+            st.warning(
+                f"⚠️ Bild/ROI **Image {selected_candidate[0]} | ROI {selected_candidate[1]}** "
+                "steht schon in der Auswahl."
+            )
+        else:
+            st.session_state.eps_calibration_selected.append(
+                selected_candidate
+            )
+
+    c1, c2 = st.columns([3, 1])
+
+    with c1:
         calibration_min_samples = st.number_input(
             "min_samples",
             min_value=2,
-            max_value=10,
             value=3,
-            step=1
+            step=1,
+            help="Wert für die EPS-Empfehlung. Die Hauptanalyse/Colibri bleibt davon unabhängig einstellbar."
         )
 
-    selected_units = select_calibration_units(
-        units,
-        int(n_calibration)
-    )
+    with c2:
+        if st.button("🗑️ Auswahl zurücksetzen"):
+            st.session_state.eps_calibration_selected = []
+            st.rerun()
+
+    selected_units = st.session_state.eps_calibration_selected
 
     st.caption(
-        f"{len(selected_units)} von {total_units} Image/ROI-Einheiten "
-        "werden gleichmäßig über die komplette Serie verteilt ausgewertet."
+        f"{len(selected_units)} von {total_units} Image/ROI-Einheiten ausgewählt. "
+        "Weitere Einheiten können jederzeit ergänzt werden."
     )
 
-    calibration_rows = []
+    if not selected_units:
+        st.info(
+            "Noch keine Einheit ausgewählt. Wähle oben beliebige Bilder/ROIs aus und "
+            "füge sie nacheinander zur Kalibrierung hinzu."
+        )
+    else:
+        calibration_rows = []
+        progress = st.progress(0)
 
-    progress = st.progress(0)
+        for i, (current_image, current_roi) in enumerate(selected_units):
+            roi_df = df[
+                (df["Image"].astype(str) == current_image) &
+                (df["ROI_ID"].astype(str) == current_roi)
+            ].copy()
 
-    for i, (current_image, current_roi) in enumerate(selected_units):
-        roi_df = df[
-            (df["Image"].astype(str) == current_image) &
-            (df["ROI_ID"].astype(str) == current_roi)
-        ].copy()
+            xy, coordinate_mode = prepare_coordinates(
+                roi_df,
+                calibration_mode,
+                manual_pixel_um
+            )
 
-        xy, coordinate_mode = prepare_coordinates(
-            roi_df,
-            calibration_mode,
-            manual_pixel_um
+            recommended_eps = recommend_eps_kdistance(
+                xy,
+                int(calibration_min_samples)
+            )
+
+            calibration_rows.append({
+                "Nr.": i + 1,
+                "Image": current_image,
+                "ROI_ID": current_roi,
+                "AT2": len(xy),
+                "EPS-Vorschlag (µm)": recommended_eps,
+                "Koordinaten": coordinate_mode
+            })
+
+            progress.progress(
+                int((i + 1) / len(selected_units) * 100)
+            )
+
+        progress.empty()
+
+        calibration_df = pd.DataFrame(calibration_rows)
+
+        valid_eps = calibration_df[
+            "EPS-Vorschlag (µm)"
+        ].dropna()
+
+        st.subheader("📋 EPS-Vorschläge pro ausgewähltem Image / ROI")
+        st.dataframe(
+            calibration_df,
+            width="stretch",
+            hide_index=True
         )
 
-        recommended_eps = recommend_eps_kdistance(
-            xy,
-            int(calibration_min_samples)
-        )
-
-        calibration_rows.append({
-            "Image": current_image,
-            "ROI_ID": current_roi,
-            "AT2": len(xy),
-            "EPS-Vorschlag (µm)": recommended_eps,
-            "Koordinaten": coordinate_mode
-        })
-
-        progress.progress(
-            int((i + 1) / len(selected_units) * 100)
-        )
-
-    progress.empty()
-
-    calibration_df = pd.DataFrame(calibration_rows)
-
-    valid_eps = calibration_df[
-        "EPS-Vorschlag (µm)"
-    ].dropna()
-
-    if len(valid_eps) == 0:
-        st.error(
-            "Für keine der ausgewählten Einheiten konnte ein EPS-Vorschlag "
-            "berechnet werden."
-        )
-        st.stop()
-
-    mean_eps = float(valid_eps.mean())
-
-    calibration_df["EPS-Vorschlag (µm)"] = (
-        calibration_df["EPS-Vorschlag (µm)"].round(0)
-    )
-
-    st.subheader("📋 EPS-Vorschläge pro Image / ROI")
-    st.dataframe(
-        calibration_df,
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.metric(
-        "Mittelwert der EPS-Vorschläge",
-        f"{mean_eps:.1f} µm"
-    )
+        if len(valid_eps) > 0:
+            mean_eps = float(valid_eps.mean())
+            st.metric(
+                "Mittelwert der EPS-Vorschläge",
+                f"{mean_eps:.1f} µm"
+            )
+        else:
+            st.warning(
+                "Für die bisher ausgewählten Einheiten konnte kein EPS-Vorschlag "
+                "berechnet werden."
+            )
 
     st.info(
-        "Der Mittelwert ist nur ein Orientierungswert. Er wird nicht "
-        "automatisch übernommen. Anschließend in **Colibri** Werte in "
-        "seiner Umgebung visuell prüfen und den endgültigen EPS-Wert "
-        "für die Hauptanalyse selbst festlegen."
+        "Der Mittelwert ist nur ein Orientierungswert. Er wird nicht automatisch übernommen. "
+        "Wähle so lange weitere, beliebige Image/ROI-Einheiten aus, bis du die Variabilität "
+        "des Datensatzes ausreichend erfasst hast. Anschließend in **Colibri** Werte in der "
+        "Umgebung des Orientierungswertes visuell prüfen und den endgültigen EPS-Wert für die "
+        "Hauptanalyse selbst festlegen."
     )
 
     st.markdown(
         """
-        **Prinzip:** Die Empfehlung basiert auf der k-distance-Kurve der
+        **Prinzip:** Die EPS-Empfehlung basiert auf der k-distance-Kurve der
         AT2-Zellzentren. Der berechnete Kniepunkt liefert einen objektiven
-        Startwert für EPS. Die wissenschaftliche Entscheidung über den
-        endgültig verwendeten Wert bleibt bei der visuellen Prüfung mit
-        Colibri.
+        Startwert. Die Auswahl der Bilder und die wissenschaftliche Entscheidung
+        über den endgültig verwendeten EPS-Wert bleiben beim Anwender.
         """
     )
 
@@ -921,7 +954,7 @@ elif mode == "🐦 Colibri":
             loc="upper left"
         )
 
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     st.markdown("---")
@@ -951,7 +984,7 @@ elif mode == "🐦 Colibri":
 
         st.dataframe(
             pd.DataFrame(cluster_table).round(2),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
     else:
@@ -967,7 +1000,7 @@ elif mode == "🐦 Colibri":
     with nav1:
         if st.button(
             "⬅️ Vorheriges",
-            use_container_width=True,
+            width="stretch",
             disabled=(current_index == 0)
         ):
             st.session_state.colibri_index -= 1
@@ -976,7 +1009,7 @@ elif mode == "🐦 Colibri":
     with nav2:
         if st.button(
             "➡️ Nächstes Bild",
-            use_container_width=True,
+            width="stretch",
             disabled=(current_index >= total_units - 1)
         ):
             st.session_state.colibri_index += 1
@@ -985,7 +1018,7 @@ elif mode == "🐦 Colibri":
     with nav3:
         if st.button(
             "⏮️ Zum Anfang",
-            use_container_width=True
+            width="stretch"
         ):
             st.session_state.colibri_index = 0
             st.rerun()
@@ -993,7 +1026,7 @@ elif mode == "🐦 Colibri":
     with nav4:
         if st.button(
             "⏭️ Zum letzten Bild",
-            use_container_width=True
+            width="stretch"
         ):
             st.session_state.colibri_index = total_units - 1
             st.rerun()
@@ -1197,7 +1230,7 @@ else:
 
     st.dataframe(
         display_df,
-        use_container_width=True,
+        width="stretch",
         height=650
     )
 
