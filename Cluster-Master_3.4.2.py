@@ -576,7 +576,7 @@ else:
     st.markdown("**Surfactant-C+ AT2-Zellen – räumliche Analyse**\n\nJede Kombination aus **Image + ROI_ID** wird als eigene Analyseeinheit behandelt.")
 
     st.sidebar.subheader("🔵 Clusterdefinition")
-    st.session_state.setdefault("main_eps_applied", 10.0)
+    st.session_state.setdefault("main_eps_applied", 12.0)
     st.session_state.setdefault("main_min_samples_applied", 3)
     st.session_state.setdefault("main_voronoi_mode_applied", "auto")
     st.session_state.setdefault("main_manual_voronoi_area_applied", 2000.0)
