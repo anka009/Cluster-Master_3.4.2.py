@@ -18,7 +18,7 @@ from scipy.spatial import Voronoi, ConvexHull
 # ============================================================
 
 st.set_page_config(
-    page_title="AT2 Spatial Analysis 3.4.1",
+    page_title="AT2 Spatial Analysis 3.4.2",
     page_icon="🔬",
     layout="wide"
 )
