@@ -1043,7 +1043,24 @@ elif mode == "🐦 Colibri":
     if st.session_state.colibri_fullscreen:
         @st.dialog("🐦 Colibri – Plot im Vollbild", width="large")
         def show_colibri_fullscreen():
-            fig_full, ax_full = plt.subplots(figsize=(16, 10))
+            # Dialog deutlich breiter machen; der Plot soll den verfügbaren
+            # Bildschirmbereich tatsächlich ausnutzen.
+            st.markdown(
+                """
+                <style>
+                [data-testid="stDialog"] > div {
+                    width: 94vw !important;
+                    max-width: 94vw !important;
+                }
+                [data-testid="stDialog"] [role="dialog"] {
+                    max-height: 94vh !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+
+            fig_full, ax_full = plt.subplots(figsize=(20, 13), dpi=120)
 
             if np.any(non_clustered):
                 ax_full.scatter(
