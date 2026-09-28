@@ -809,28 +809,96 @@ elif mode == "🐦 Colibri":
 
     st.sidebar.subheader("🔵 DBSCAN")
 
-    eps_um = st.sidebar.slider(
-        "EPS – maximaler Abstand (µm)",
-        min_value=1.0,
-        max_value=100.0,
-        value=float(
+    # ------------------------------------------------------------
+    # EPS / min_samples: Slider + direkte Zahleneingabe
+    # Beide Bedienelemente bleiben synchron.
+    # ------------------------------------------------------------
+    if "colibri_eps_input" not in st.session_state:
+        st.session_state.colibri_eps_input = float(
             st.session_state.colibri_eps
-        ),
-        step=1.0
-    )
+        )
+    if "colibri_eps_slider" not in st.session_state:
+        st.session_state.colibri_eps_slider = float(
+            st.session_state.colibri_eps
+        )
 
-    min_samples = st.sidebar.slider(
-        "min_samples",
-        min_value=2,
-        max_value=10,
-        value=int(
+    if "colibri_min_samples_input" not in st.session_state:
+        st.session_state.colibri_min_samples_input = int(
             st.session_state.colibri_min_samples
-        ),
-        step=1
-    )
+        )
+    if "colibri_min_samples_slider" not in st.session_state:
+        st.session_state.colibri_min_samples_slider = int(
+            st.session_state.colibri_min_samples
+        )
 
-    st.session_state.colibri_eps = eps_um
-    st.session_state.colibri_min_samples = min_samples
+    def sync_eps_from_slider():
+        value = float(st.session_state.colibri_eps_slider)
+        st.session_state.colibri_eps_input = value
+        st.session_state.colibri_eps = value
+
+    def sync_eps_from_input():
+        value = float(st.session_state.colibri_eps_input)
+        st.session_state.colibri_eps_slider = value
+        st.session_state.colibri_eps = value
+
+    def sync_min_samples_from_slider():
+        value = int(st.session_state.colibri_min_samples_slider)
+        st.session_state.colibri_min_samples_input = value
+        st.session_state.colibri_min_samples = value
+
+    def sync_min_samples_from_input():
+        value = int(st.session_state.colibri_min_samples_input)
+        st.session_state.colibri_min_samples_slider = value
+        st.session_state.colibri_min_samples = value
+
+    eps_c1, eps_c2 = st.sidebar.columns([2.2, 1])
+
+    with eps_c1:
+        st.slider(
+            "EPS – maximaler Abstand (µm)",
+            min_value=1.0,
+            max_value=100.0,
+            step=1.0,
+            key="colibri_eps_slider",
+            on_change=sync_eps_from_slider
+        )
+
+    with eps_c2:
+        st.number_input(
+            "EPS",
+            min_value=1.0,
+            max_value=100.0,
+            step=1.0,
+            format="%.0f",
+            key="colibri_eps_input",
+            on_change=sync_eps_from_input
+        )
+
+    min_c1, min_c2 = st.sidebar.columns([2.2, 1])
+
+    with min_c1:
+        st.slider(
+            "min_samples",
+            min_value=2,
+            max_value=10,
+            step=1,
+            key="colibri_min_samples_slider",
+            on_change=sync_min_samples_from_slider
+        )
+
+    with min_c2:
+        st.number_input(
+            "min_samples",
+            min_value=2,
+            max_value=10,
+            step=1,
+            format="%d",
+            key="colibri_min_samples_input",
+            on_change=sync_min_samples_from_input
+        )
+
+    eps_um = float(st.session_state.colibri_eps)
+    min_samples = int(st.session_state.colibri_min_samples)
 
     current_index = min(
         st.session_state.colibri_index,
@@ -954,8 +1022,90 @@ elif mode == "🐦 Colibri":
             loc="upper left"
         )
 
+    # ------------------------------------------------------------
+    # Colibri-Vollbild: derselbe Plot, aber separat und groß.
+    # Der normale Plot bleibt in der Hauptansicht sichtbar.
+    # ------------------------------------------------------------
     st.pyplot(fig, width="stretch")
     plt.close(fig)
+
+    if "colibri_fullscreen" not in st.session_state:
+        st.session_state.colibri_fullscreen = False
+
+    if st.button(
+        "⛶ Plot im Vollbild öffnen",
+        key="colibri_fullscreen_button",
+        width="stretch"
+    ):
+        st.session_state.colibri_fullscreen = True
+        st.rerun()
+
+    if st.session_state.colibri_fullscreen:
+        @st.dialog("🐦 Colibri – Plot im Vollbild", width="large")
+        def show_colibri_fullscreen():
+            fig_full, ax_full = plt.subplots(figsize=(16, 10))
+
+            if np.any(non_clustered):
+                ax_full.scatter(
+                    xy[non_clustered, 0],
+                    xy[non_clustered, 1],
+                    s=35,
+                    alpha=0.45,
+                    label="nicht geclustert"
+                )
+
+            for cluster_id in cluster_ids:
+                mask = labels == cluster_id
+                points = xy[mask]
+
+                ax_full.scatter(
+                    points[:, 0],
+                    points[:, 1],
+                    s=75,
+                    label=f"Cluster {cluster_id + 1}"
+                )
+
+                if len(points) >= 3:
+                    try:
+                        hull = ConvexHull(points)
+                        hull_points = points[hull.vertices]
+                        hull_points = np.vstack(
+                            [hull_points, hull_points[0]]
+                        )
+                        ax_full.plot(
+                            hull_points[:, 0],
+                            hull_points[:, 1],
+                            linewidth=1.8
+                        )
+                    except Exception:
+                        pass
+
+            ax_full.set_xlabel("X (µm)")
+            ax_full.set_ylabel("Y (µm)")
+            ax_full.set_title(
+                f"DBSCAN: EPS = {eps_um:.0f} µm | "
+                f"min_samples = {min_samples}"
+            )
+            ax_full.set_aspect("equal", adjustable="box")
+
+            if len(cluster_ids) <= 15:
+                ax_full.legend(
+                    bbox_to_anchor=(1.02, 1),
+                    loc="upper left"
+                )
+
+            st.pyplot(fig_full, width="stretch")
+            plt.close(fig_full)
+
+            if st.button(
+                "↩ Vollbild schließen",
+                key="colibri_fullscreen_close",
+                width="stretch"
+            ):
+                st.session_state.colibri_fullscreen = False
+                st.rerun()
+
+        show_colibri_fullscreen()
 
     st.markdown("---")
     st.subheader("🔎 Erkannte Cluster")
